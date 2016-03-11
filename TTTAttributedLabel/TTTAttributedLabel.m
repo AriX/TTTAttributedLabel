@@ -204,12 +204,18 @@ static inline CGSize CTFramesetterSuggestFrameSizeForAttributedStringWithConstra
 @interface TTTAccessibilityElement : UIAccessibilityElement
 @property (nonatomic, weak) UIView *superview;
 @property (nonatomic, assign) CGRect boundingRect;
+@property (nonatomic, strong) BOOL (^activateBlock)();
 @end
 
 @implementation TTTAccessibilityElement
 
 - (CGRect)accessibilityFrame {
     return UIAccessibilityConvertFrameToScreenCoordinates(self.boundingRect, self.superview);
+}
+
+
+- (BOOL)accessibilityActivate {
+    return (self.activateBlock ? self.activateBlock() : NO);
 }
 
 @end
@@ -699,19 +705,20 @@ static inline CGSize CTFramesetterSuggestFrameSizeForAttributedStringWithConstra
 }
 
 - (CGRect)boundingRectForCharacterRange:(NSRange)range {
-    NSMutableAttributedString *mutableAttributedString = [self.attributedText mutableCopy];
-
-    NSTextStorage *textStorage = [[NSTextStorage alloc] initWithAttributedString:mutableAttributedString];
+    NSTextStorage *textStorage = [[NSTextStorage alloc] initWithAttributedString:self.attributedText];
 
     NSLayoutManager *layoutManager = [[NSLayoutManager alloc] init];
     [textStorage addLayoutManager:layoutManager];
 
-    NSTextContainer *textContainer = [[NSTextContainer alloc] initWithSize:self.bounds.size];
+    CGSize size = self.bounds.size;
+    size.height += 10.0f;
+    size.width += 10.0f;
+    
+    NSTextContainer *textContainer = [[NSTextContainer alloc] initWithSize:size];
     [layoutManager addTextContainer:textContainer];
 
-    NSRange glyphRange;
-    [layoutManager characterRangeForGlyphRange:range actualGlyphRange:&glyphRange];
-
+    NSRange glyphRange = [layoutManager glyphRangeForCharacterRange:range actualCharacterRange:NULL];
+    
     return [layoutManager boundingRectForGlyphRange:glyphRange inTextContainer:textContainer];
 }
 
@@ -1289,6 +1296,53 @@ afterInheritingLabelAttributesAndConfiguringWithBlock:(NSMutableAttributedString
                     linkElement.boundingRect = [self boundingRectForCharacterRange:link.result.range];
                     linkElement.superview = self;
                     linkElement.accessibilityLabel = accessibilityLabel;
+                    linkElement.activateBlock = ^BOOL{
+                        if (link.linkTapBlock) {
+                            link.linkTapBlock(self, link);
+                            return YES;
+                        }
+                        
+                        NSTextCheckingResult *result = link.result;
+                        
+                        switch (result.resultType) {
+                            case NSTextCheckingTypeLink:
+                                if ([self.delegate respondsToSelector:@selector(attributedLabel:didSelectLinkWithURL:)]) {
+                                    [self.delegate attributedLabel:self didSelectLinkWithURL:result.URL];
+                                    return YES;
+                                }
+                                break;
+                            case NSTextCheckingTypeAddress:
+                                if ([self.delegate respondsToSelector:@selector(attributedLabel:didSelectLinkWithAddress:)]) {
+                                    [self.delegate attributedLabel:self didSelectLinkWithAddress:result.addressComponents];
+                                    return YES;
+                                }
+                                break;
+                            case NSTextCheckingTypePhoneNumber:
+                                if ([self.delegate respondsToSelector:@selector(attributedLabel:didSelectLinkWithPhoneNumber:)]) {
+                                    [self.delegate attributedLabel:self didSelectLinkWithPhoneNumber:result.phoneNumber];
+                                    return YES;
+                                }
+                                break;
+                            case NSTextCheckingTypeDate:
+                                if (result.timeZone && [self.delegate respondsToSelector:@selector(attributedLabel:didSelectLinkWithDate:timeZone:duration:)]) {
+                                    [self.delegate attributedLabel:self didSelectLinkWithDate:result.date timeZone:result.timeZone duration:result.duration];
+                                    return YES;
+                                } else if ([self.delegate respondsToSelector:@selector(attributedLabel:didSelectLinkWithDate:)]) {
+                                    [self.delegate attributedLabel:self didSelectLinkWithDate:result.date];
+                                    return YES;
+                                }
+                                break;
+                            case NSTextCheckingTypeTransitInformation:
+                                if ([self.delegate respondsToSelector:@selector(attributedLabel:didSelectLinkWithTransitInformation:)]) {
+                                    [self.delegate attributedLabel:self didSelectLinkWithTransitInformation:result.components];
+                                    return YES;
+                                }
+                            default:
+                                break;
+                        }
+                        
+                        return NO;
+                    };
 
                     if (![accessibilityLabel isEqualToString:accessibilityValue]) {
                         linkElement.accessibilityValue = accessibilityValue;
